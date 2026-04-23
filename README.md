@@ -1,4 +1,4 @@
-# 📚 Fall-2024-B — Class Assignments & Quizzes Tracker
+# 📚 Class Assignments & Quizzes Tracker
 
 > A real-time shared web app for BS Computer Science Semester 4 students to track assignments and quizzes collaboratively — no login required.
 
@@ -6,7 +6,7 @@
 
 ## 🌐 Live App
 
-👉 **[https://your-username.github.io/fall-2024-b](https://your-username.github.io/fall-2024-b)**
+👉 **[https://mirabdullah541.github.io/fall-2024-b](https://mirabdullah541.github.io/fall-2024-b)**
 
 > Replace the link above with your actual GitHub Pages URL after deploying.
 
@@ -14,7 +14,7 @@
 
 ## 📌 What Is This?
 
-**Fall-2024-B** is a lightweight, single-file web application built for a university class section. Any student can open the link and instantly:
+**This web app** is a lightweight, single-file web application built for a university class section. Any student can open the link and instantly:
 
 - See all upcoming assignments and quizzes posted by classmates
 - Add new items that appear live for everyone
