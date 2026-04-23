@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fall-2024-B · Class Tracker</title>
+
+  <!-- React -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <!-- Firebase COMPAT SDK (v9 compat = classic global style, no import/export needed) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <!-- Initialize Firebase BEFORE React boots -->
+  <script>
+    firebase.initializeApp({
+      apiKey:            "AIzaSyBupX7epzuIrSOqZLHscoe3T-bLqsBkbjA",
+      authDomain:        "fall-2024-b.firebaseapp.com",
+      projectId:         "fall-2024-b",
+      storageBucket:     "fall-2024-b.firebasestorage.app",
+      messagingSenderId: "904713966296",
+      appId:             "1:904713966296:web:94503eee3f5685723abdad"
+    });
+
+    // Expose db globally so React can use it
+    window.db = firebase.firestore();
+  </script>
+
+  <style>* { box-sizing: border-box; margin: 0; padding: 0; } body { background: #080c14; }</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // ── Constants ─────────────────────────────────────────────────────────────
+    const SUBJECTS = [
+      "Comp Organisation | Assembly Lang. (Lab)",
+      "Mobile Application | Development (Th)",
+      "Programming for Artificial Intelligence (Lab)",
+      "Parallel | Distributed Computing (Lab)",
+      "Comp Organisation | Assembly Lang. (Th)",
+      "HCl | Computer Graphic (Lab)",
+      "Web Technology (Th)",
+      "Programming for Artificial Intelligence (Th)",
+      "HCl | Computer Graphic (Th)",
+      "Mobile Application | Development (Lab)",
+      "Web Technology (Lab)",
+      "Parallel | Distributed Computing (Th)",
+    ];
+    const SOURCES = ["Google Classroom", "WhatsApp Group", "Teacher (verbal)"];
+    const TYPES   = ["Assignment", "Quiz"];
+    const COLORS  = {
+      "Comp Organisation | Assembly Lang. (Lab)":      "#f97316",
+      "Comp Organisation | Assembly Lang. (Th)":       "#fb923c",
+      "Mobile Application | Development (Th)":         "#6366f1",
+      "Mobile Application | Development (Lab)":        "#818cf8",
+      "Programming for Artificial Intelligence (Lab)": "#10b981",
+      "Programming for Artificial Intelligence (Th)":  "#34d399",
+      "Parallel | Distributed Computing (Lab)":        "#0ea5e9",
+      "Parallel | Distributed Computing (Th)":         "#38bdf8",
+      "HCl | Computer Graphic (Lab)":                  "#ec4899",
+      "HCl | Computer Graphic (Th)":                   "#f472b6",
+      "Web Technology (Th)":                           "#a855f7",
+      "Web Technology (Lab)":                          "#c084fc",
+    };
+
+    const subjColor = s => COLORS[s] || "#94a3b8";
+
+    function getStatus(deadline) {
+      const diff = new Date(deadline) - Date.now();
+      if (diff < 0) return { label:"Ended", level:"ended", icon:"⬛" };
+      const h = Math.floor(diff / 36e5);
+      if (h < 48) return {
+        label: h < 24 ? `Ending in ${h}h` : `Ending in ${Math.floor(h/24)}d ${h%24}h`,
+        level: "soon", icon: "🟡",
+      };
+      return { label:`Ongoing · ${Math.floor(diff/864e5)}d left`, level:"ongoing", icon:"🟢" };
+    }
+
+    const fmt = dt => new Date(dt).toLocaleString([], { dateStyle:"medium", timeStyle:"short" });
+    const EMPTY = { type:"Assignment", subject:"", title:"", description:"", source:"", deadline:"" };
+
+    // ── App ───────────────────────────────────────────────────────────────────
+    function App() {
+      const [items,         setItems]         = useState([]);
+      const [fbOk,          setFbOk]          = useState(false);
+      const [fbError,       setFbError]       = useState(null);
+      const [view,          setView]          = useState("dashboard");
+      const [selectedId,    setSelectedId]    = useState(null);
+      const [form,          setForm]          = useState(EMPTY);
+      const [filterSubject, setFilterSubject] = useState("All");
+      const [filterType,    setFilterType]    = useState("All");
+      const [filterStatus,  setFilterStatus]  = useState("All");
+      const [sortBy,        setSortBy]        = useState("deadline");
+      const [search,        setSearch]        = useState("");
+      const [dark,          setDark]          = useState(true);
+      const [toast,         setToast]         = useState(null);
+      const [saving,        setSaving]        = useState(false);
+      const [deleting,      setDeleting]      = useState(false);
+      const unsubRef = useRef(null);
+
+      // ── Subscribe to Firestore on mount ──────────────────────────────────
+      useEffect(() => {
+        try {
+          const colRef = window.db
+            .collection("items")
+            .orderBy("createdAt", "desc");
+
+          unsubRef.current = colRef.onSnapshot(
+            (snap) => {
+              const docs = snap.docs.map(d => ({
+                id: d.id,
+                ...d.data(),
+                createdAt: d.data().createdAt?.toDate?.().toISOString()
+                           ?? new Date().toISOString(),
+              }));
+              setItems(docs);
+              setFbOk(true);
+              setFbError(null);
+            },
+            (err) => {
+              console.error("Firestore error:", err);
+              setFbError(err.message);
+            }
+          );
+        } catch(e) {
+          console.error("Firestore setup error:", e);
+          setFbError(e.message);
+        }
+
+        return () => { if (unsubRef.current) unsubRef.current(); };
+      }, []);
+
+      // ── Toast ─────────────────────────────────────────────────────────────
+      const showToast = (msg, type="success") => {
+        setToast({ msg, type });
+        setTimeout(() => setToast(null), 3500);
+      };
+
+      // ── Add item ──────────────────────────────────────────────────────────
+      const handleAdd = async () => {
+        if (!form.subject || !form.title || !form.deadline || !form.source) {
+          showToast("Please fill all required fields.", "error");
+          return;
+        }
+        setSaving(true);
+        try {
+          await window.db.collection("items").add({
+            type:        form.type,
+            subject:     form.subject,
+            title:       form.title,
+            description: form.description,
+            source:      form.source,
+            deadline:    form.deadline,
+            createdAt:   firebase.firestore.FieldValue.serverTimestamp(),
+          });
+          setForm(EMPTY);
+          setView("dashboard");
+          showToast(`${form.type} added for the whole class! ✓`);
+        } catch(e) {
+          console.error("Add error:", e);
+          showToast("Save failed: " + e.message, "error");
+        }
+        setSaving(false);
+      };
+
+      // ── Delete item ───────────────────────────────────────────────────────
+      const handleDelete = async (id) => {
+        setDeleting(true);
+        try {
+          await window.db.collection("items").doc(id).delete();
+          setView("dashboard");
+          showToast("Deleted for everyone.", "info");
+        } catch(e) {
+          console.error("Delete error:", e);
+          showToast("Delete failed: " + e.message, "error");
+        }
+        setDeleting(false);
+      };
+
+      // ── Filter + sort ─────────────────────────────────────────────────────
+      const visible = items
+        .filter(i => filterSubject==="All" || i.subject===filterSubject)
+        .filter(i => filterType==="All"    || i.type===filterType)
+        .filter(i => filterStatus==="All"  || getStatus(i.deadline).level===filterStatus.toLowerCase())
+        .filter(i => !search ||
+          i.title.toLowerCase().includes(search.toLowerCase()) ||
+          i.subject.toLowerCase().includes(search.toLowerCase()))
+        .sort((a,b) => sortBy==="deadline"
+          ? new Date(a.deadline)-new Date(b.deadline)
+          : a.subject.localeCompare(b.subject));
+
+      const usedSubjects = [...new Set(items.map(i=>i.subject))];
+      const soonCount    = items.filter(i=>getStatus(i.deadline).level==="soon").length;
+      const ongoingCount = items.filter(i=>getStatus(i.deadline).level==="ongoing").length;
+      const endedCount   = items.filter(i=>getStatus(i.deadline).level==="ended").length;
+
+      // ── Theme ─────────────────────────────────────────────────────────────
+      const bg      = dark ? "#080c14" : "#f0ede8";
+      const surface = dark ? "#0f1520" : "#ffffff";
+      const surf2   = dark ? "#141c2e" : "#f7f4f0";
+      const bdr     = dark ? "#1e2d47" : "#ddd8d0";
+      const tx      = dark ? "#e2ddd6" : "#14110e";
+      const mt      = dark ? "#5a7090" : "#8a8078";
+      const acc     = "#3b82f6";
+      const accAlt  = "#f59e0b";
+
+      const css = `
+        @import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+        *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+        body { font-family:'IBM Plex Sans',sans-serif; background:${bg}; color:${tx}; min-height:100vh; transition:background .25s,color .25s; }
+        ::selection { background:${acc}44; }
+        ::-webkit-scrollbar { width:5px; } ::-webkit-scrollbar-thumb { background:${bdr}; border-radius:3px; }
+        input,select,textarea,button { font-family:'IBM Plex Sans',sans-serif; }
+
+        .wrap { max-width:1040px; margin:0 auto; padding:0 20px 100px; }
+
+        .nav { position:sticky; top:0; z-index:200; background:${bg}f0; backdrop-filter:blur(16px); border-bottom:1px solid ${bdr}; }
+        .nav-inner { max-width:1040px; margin:0 auto; padding:0 20px; height:58px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+
+        .live-dot { width:7px; height:7px; border-radius:50%; background:#16a34a; display:inline-block; margin-right:6px; animation:pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+
+        .hero { padding:40px 0 0; margin-bottom:32px; }
+        .hero-ey { font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:2.5px; text-transform:uppercase; color:${acc}; margin-bottom:10px; }
+        .hero-title { font-family:'Libre Baskerville',serif; font-size:clamp(36px,6vw,58px); font-weight:700; letter-spacing:-1.5px; line-height:1.05; }
+        .hero-title span { color:${acc}; font-style:italic; }
+        .hero-sub { font-size:14px; color:${mt}; margin-top:8px; font-weight:300; }
+        .hero-rule { height:2px; background:linear-gradient(90deg,${acc},transparent); margin-top:24px; border-radius:2px; }
+
+        .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:28px 0; }
+        @media(max-width:560px){ .stats{grid-template-columns:repeat(2,1fr);} }
+        .stat { padding:14px 16px; border-radius:10px; border:1px solid ${bdr}; background:${surface}; }
+        .stat-n { font-family:'Libre Baskerville',serif; font-size:30px; font-weight:700; line-height:1; }
+        .stat-l { font-size:11px; color:${mt}; margin-top:4px; text-transform:uppercase; letter-spacing:.5px; }
+
+        .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px; }
+        .sw { flex:1; min-width:160px; position:relative; }
+        .si { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:${mt}; pointer-events:none; }
+        .search-in { width:100%; background:${surface}; border:1px solid ${bdr}; color:${tx}; padding:9px 12px 9px 34px; border-radius:8px; font-size:13px; outline:none; }
+        .search-in:focus { border-color:${acc}; }
+        .sel { background:${surface}; border:1px solid ${bdr}; color:${tx}; padding:8px 12px; border-radius:8px; font-size:13px; outline:none; cursor:pointer; }
+        .sel:focus { border-color:${acc}; }
+
+        .chip-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:20px; }
+        .chip { padding:4px 13px; border-radius:20px; font-size:11.5px; font-weight:500; cursor:pointer; border:1px solid ${bdr}; background:${surface}; color:${mt}; transition:all .15s; white-space:nowrap; }
+        .chip:hover { border-color:${acc}88; color:${tx}; }
+        .chip.on { background:${acc}; color:#fff; border-color:${acc}; }
+
+        .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:14px; }
+        @media(max-width:560px){ .grid{grid-template-columns:1fr;} }
+
+        .icard { background:${surface}; border:1px solid ${bdr}; border-radius:12px; padding:18px 18px 16px; cursor:pointer; position:relative; overflow:hidden; transition:transform .18s,box-shadow .18s,border-color .18s; }
+        .icard:hover { transform:translateY(-2px); box-shadow:0 10px 30px ${dark?"#0009":"#0001"}; border-color:${acc}55; }
+        .icard.ended { opacity:.5; }
+        .icard-stripe { position:absolute; top:0; left:0; right:0; height:3px; border-radius:12px 12px 0 0; }
+
+        .tbadge { display:inline-flex; align-items:center; gap:4px; font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:500; padding:3px 9px; border-radius:4px; text-transform:uppercase; letter-spacing:.5px; }
+        .t-a { background:${acc}22; color:${acc}; }
+        .t-q { background:${accAlt}22; color:${accAlt}; }
+        .stbadge { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; padding:3px 10px; border-radius:5px; }
+        .st-on { background:#16a34a22; color:#16a34a; }
+        .st-so { background:#d9770622; color:#d97706; }
+        .st-en { background:#64748b22; color:#64748b; }
+        .subj-pill { display:inline-block; font-size:11px; font-weight:500; padding:2px 9px; border-radius:4px; }
+
+        .btn { display:inline-flex; align-items:center; gap:7px; padding:9px 18px; border-radius:8px; border:none; font-size:13.5px; font-weight:500; transition:all .16s; cursor:pointer; white-space:nowrap; }
+        .b-primary { background:${acc}; color:#fff; }
+        .b-primary:hover { background:#2563eb; transform:translateY(-1px); box-shadow:0 4px 16px ${acc}55; }
+        .b-ghost { background:transparent; color:${mt}; border:1px solid ${bdr}; }
+        .b-ghost:hover { background:${surf2}; color:${tx}; }
+        .b-danger { background:#ef444422; color:#ef4444; border:1px solid #ef444433; }
+        .b-danger:hover { background:#ef4444; color:#fff; }
+        .b-icon { width:36px; height:36px; padding:0; justify-content:center; border-radius:8px; }
+
+        .fcard { background:${surface}; border:1px solid ${bdr}; border-radius:14px; padding:28px; }
+        .fgrid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+        @media(max-width:600px){ .fgrid{grid-template-columns:1fr;} }
+        .fg { display:flex; flex-direction:column; gap:6px; }
+        .fg.full { grid-column:1/-1; }
+        .lbl { font-size:11px; font-weight:600; color:${mt}; text-transform:uppercase; letter-spacing:.6px; }
+        .req { color:#ef4444; }
+        .inp { background:${surf2}; border:1px solid ${bdr}; color:${tx}; padding:10px 13px; border-radius:8px; font-size:13.5px; outline:none; width:100%; transition:border-color .18s; }
+        .inp:focus { border-color:${acc}; }
+        .inp-ta { resize:vertical; min-height:80px; }
+        .type-toggle { display:flex; border:1px solid ${bdr}; border-radius:8px; overflow:hidden; }
+        .type-opt { flex:1; padding:9px; text-align:center; font-size:13px; font-weight:500; cursor:pointer; transition:all .15s; background:transparent; border:none; color:${mt}; }
+        .type-opt.act-a { background:${acc}; color:#fff; }
+        .type-opt.act-q { background:${accAlt}; color:#fff; }
+        .drow { display:flex; gap:16px; padding:14px 0; border-bottom:1px solid ${bdr}; }
+        .dlbl { font-size:11px; font-weight:600; color:${mt}; text-transform:uppercase; letter-spacing:.5px; min-width:96px; padding-top:2px; }
+        .dval { font-size:13.5px; color:${tx}; flex:1; }
+        .divider { height:1px; background:${bdr}; margin:20px 0; }
+        .empty { text-align:center; padding:72px 24px; color:${mt}; }
+        .empty-icon { font-size:52px; margin-bottom:16px; }
+
+        .toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); padding:11px 22px; border-radius:9px; font-size:13.5px; font-weight:500; box-shadow:0 8px 28px #0005; z-index:9999; white-space:nowrap; animation:popUp .22s ease; }
+        .t-ok { background:#16a34a; color:#fff; }
+        .t-er { background:#dc2626; color:#fff; }
+        .t-in { background:${dark?"#1e2d47":"#374151"}; color:#fff; }
+        @keyframes popUp { from{opacity:0;transform:translateX(-50%) translateY(10px);}to{opacity:1;transform:translateX(-50%) translateY(0);} }
+
+        .err-banner { background:#7c2d1222; border:1px solid #f9731655; border-radius:10px; padding:16px 20px; margin-bottom:24px; font-size:13px; color:#fb923c; line-height:1.7; }
+        .err-banner strong { display:block; font-size:14px; margin-bottom:4px; }
+        .err-banner code { background:#0003; padding:1px 6px; border-radius:4px; font-family:'IBM Plex Mono',monospace; font-size:12px; }
+
+        .fade-in { animation:fadeIn .35s ease both; }
+        @keyframes fadeIn { from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;} }
+      `;
+
+      const Logo = () => (
+        <span style={{fontFamily:"'Libre Baskerville',serif",fontSize:20,fontWeight:700,letterSpacing:"-0.5px"}}>
+          Fall-<span style={{color:acc,fontStyle:"italic"}}>2024</span>-B
+        </span>
+      );
+
+      const Toast = () => toast ? (
+        <div className={`toast ${toast.type==="success"?"t-ok":toast.type==="error"?"t-er":"t-in"}`}>
+          {toast.msg}
+        </div>
+      ) : null;
+
+      // ── DETAIL VIEW ───────────────────────────────────────────────────────
+      if (view==="detail") {
+        const item = items.find(i=>i.id===selectedId);
+        if (!item) { setView("dashboard"); return null; }
+        const st = getStatus(item.deadline);
+        const color = subjColor(item.subject);
+        return (
+          <div style={{background:bg,minHeight:"100vh"}}>
+            <style>{css}</style>
+            <nav className="nav"><div className="nav-inner">
+              <Logo/>
+              <div style={{display:"flex",gap:8}}>
+                <button className="btn b-ghost" onClick={()=>setView("dashboard")}>← Back</button>
+                <button className="btn b-icon b-ghost" onClick={()=>setDark(!dark)}>{dark?"☀️":"🌙"}</button>
+              </div>
+            </div></nav>
+            <div className="wrap fade-in">
+              <div style={{paddingTop:32,marginBottom:24}}>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                  <span className={`tbadge ${item.type==="Assignment"?"t-a":"t-q"}`}>
+                    {item.type==="Assignment"?"📋":"📝"} {item.type}
+                  </span>
+                  <span className={`stbadge ${st.level==="ongoing"?"st-on":st.level==="soon"?"st-so":"st-en"}`}>
+                    {st.icon} {st.label}
+                  </span>
+                </div>
+                <h1 style={{fontFamily:"'Libre Baskerville',serif",fontSize:"clamp(22px,4vw,34px)",fontWeight:700,letterSpacing:"-0.5px",lineHeight:1.2,marginBottom:8}}>
+                  {item.title}
+                </h1>
+                <span className="subj-pill" style={{background:color+"22",color,fontSize:12}}>{item.subject}</span>
+              </div>
+              <div className="fcard" style={{marginBottom:16}}>
+                {[
+                  ["📅 Deadline", fmt(item.deadline)],
+                  ["📡 Source",   item.source],
+                  item.description ? ["📝 Notes", item.description] : null,
+                  ["🕐 Added",    fmt(item.createdAt)],
+                ].filter(Boolean).map(([l,v])=>(
+                  <div key={l} className="drow">
+                    <span className="dlbl">{l}</span>
+                    <span className="dval">{v}</span>
+                  </div>
+                ))}
+              </div>
+              <button className="btn b-danger" disabled={deleting} onClick={()=>handleDelete(item.id)}>
+                {deleting ? "Deleting…" : "🗑 Delete for everyone"}
+              </button>
+            </div>
+            <Toast/>
+          </div>
+        );
+      }
+
+      // ── ADD FORM ──────────────────────────────────────────────────────────
+      if (view==="add") return (
+        <div style={{background:bg,minHeight:"100vh"}}>
+          <style>{css}</style>
+          <nav className="nav"><div className="nav-inner">
+            <Logo/>
+            <button className="btn b-ghost" onClick={()=>{setForm(EMPTY);setView("dashboard");}}>✕ Cancel</button>
+          </div></nav>
+          <div className="wrap fade-in">
+            <div style={{paddingTop:32,marginBottom:24}}>
+              <h2 style={{fontFamily:"'Libre Baskerville',serif",fontSize:24,fontWeight:700,marginBottom:4}}>Add New Item</h2>
+              <p style={{fontSize:13,color:mt}}>Will be instantly visible to all classmates.</p>
+            </div>
+            <div className="fcard">
+              {/* Type toggle */}
+              <div className="fg" style={{marginBottom:20}}>
+                <label className="lbl">Type <span className="req">*</span></label>
+                <div className="type-toggle">
+                  {TYPES.map(t=>(
+                    <button key={t}
+                      className={`type-opt ${form.type===t?(t==="Assignment"?"act-a":"act-q"):""}`}
+                      onClick={()=>setForm({...form,type:t})}>
+                      {t==="Assignment"?"📋":"📝"} {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="fgrid">
+                <div className="fg full">
+                  <label className="lbl">Subject <span className="req">*</span></label>
+                  <select className="inp" value={form.subject} onChange={e=>setForm({...form,subject:e.target.value})}>
+                    <option value="">Select a subject…</option>
+                    {SUBJECTS.map(s=><option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div className="fg full">
+                  <label className="lbl">Title <span className="req">*</span></label>
+                  <input className="inp"
+                    placeholder={form.type==="Quiz"?"e.g. Ch.4 Pointer Quiz":"e.g. Lab Report #3"}
+                    value={form.title}
+                    onChange={e=>setForm({...form,title:e.target.value})}/>
+                </div>
+                <div className="fg">
+                  <label className="lbl">Source <span className="req">*</span></label>
+                  <select className="inp" value={form.source} onChange={e=>setForm({...form,source:e.target.value})}>
+                    <option value="">Where was this announced?</option>
+                    {SOURCES.map(s=><option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div className="fg">
+                  <label className="lbl">Deadline <span className="req">*</span></label>
+                  <input className="inp" type="datetime-local" value={form.deadline}
+                    onChange={e=>setForm({...form,deadline:e.target.value})}/>
+                </div>
+                <div className="fg full">
+                  <label className="lbl">Notes <span style={{color:mt,fontWeight:400,textTransform:"none"}}>(optional)</span></label>
+                  <textarea className="inp inp-ta"
+                    placeholder="Extra instructions, page numbers, topics…"
+                    value={form.description}
+                    onChange={e=>setForm({...form,description:e.target.value})}/>
+                </div>
+              </div>
+              <div className="divider"/>
+              <div style={{display:"flex",gap:10}}>
+                <button className="btn b-primary" onClick={handleAdd} disabled={saving} style={{minWidth:200}}>
+                  {saving ? "☁ Saving to cloud…" : `☁ Add ${form.type} for Class`}
+                </button>
+                <button className="btn b-ghost" onClick={()=>{setForm(EMPTY);setView("dashboard");}}>Cancel</button>
+              </div>
+            </div>
+          </div>
+          <Toast/>
+        </div>
+      );
+
+      // ── DASHBOARD ─────────────────────────────────────────────────────────
+      return (
+        <div style={{background:bg,minHeight:"100vh"}}>
+          <style>{css}</style>
+
+          <nav className="nav"><div className="nav-inner">
+            <Logo/>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {soonCount>0&&(
+                <span style={{background:"#d9770622",color:"#d97706",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20,fontFamily:"'IBM Plex Mono',monospace"}}>
+                  ⚠ {soonCount} ending soon
+                </span>
+              )}
+              <button className="btn b-primary" onClick={()=>setView("add")}>+ Add</button>
+              <button className="btn b-icon b-ghost" onClick={()=>setDark(!dark)} title="Toggle theme">
+                {dark?"☀️":"🌙"}
+              </button>
+            </div>
+          </div></nav>
+
+          <div className="wrap">
+            {/* Hero */}
+            <div className="hero fade-in">
+              <p className="hero-ey">BS · Semester 4</p>
+              <h1 className="hero-title">Fall-<span>2024</span>-B</h1>
+              <p className="hero-sub">
+                {fbOk
+                  ? <><span className="live-dot"/>Live · synced across all devices · {items.length} item{items.length!==1?"s":""}</>
+                  : fbError
+                    ? "⚠ Firebase connection error — see banner below"
+                    : "Connecting to Firebase…"}
+              </p>
+              <div className="hero-rule"/>
+            </div>
+
+            {/* Error banner */}
+            {fbError&&(
+              <div className="err-banner fade-in">
+                <strong>⚠️ Firestore connection failed</strong>
+                Error: <code>{fbError}</code><br/>
+                Most likely fix: Go to <strong>Firebase Console → Firestore → Rules</strong> and set:
+                <br/><code>allow read, write: if true;</code><br/>
+                then click <strong>Publish</strong>.
+              </div>
+            )}
+
+            {/* Stats */}
+            <div className="stats fade-in">
+              {[
+                {n:items.length,  l:"Total",       c:tx},
+                {n:ongoingCount,  l:"Ongoing",     c:"#16a34a"},
+                {n:soonCount,     l:"Ending Soon", c:"#d97706"},
+                {n:endedCount,    l:"Ended",       c:mt},
+              ].map(({n,l,c})=>(
+                <div key={l} className="stat">
+                  <div className="stat-n" style={{color:c}}>{n}</div>
+                  <div className="stat-l">{l}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Toolbar */}
+            <div className="toolbar fade-in">
+              <div className="sw">
+                <svg className="si" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                </svg>
+                <input className="search-in" placeholder="Search title or subject…"
+                  value={search} onChange={e=>setSearch(e.target.value)}/>
+              </div>
+              <select className="sel" value={filterType} onChange={e=>setFilterType(e.target.value)}>
+                <option value="All">All Types</option>
+                {TYPES.map(t=><option key={t}>{t}</option>)}
+              </select>
+              <select className="sel" value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+                <option value="All">All Status</option>
+                <option value="Ongoing">Ongoing</option>
+                <option value="Soon">Ending Soon</option>
+                <option value="Ended">Ended</option>
+              </select>
+              <select className="sel" value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+                <option value="deadline">Sort: Deadline</option>
+                <option value="subject">Sort: Subject</option>
+              </select>
+            </div>
+
+            {/* Subject chips */}
+            <div className="chip-row fade-in">
+              <span className={`chip ${filterSubject==="All"?"on":""}`} onClick={()=>setFilterSubject("All")}>All Subjects</span>
+              {usedSubjects.map(s=>(
+                <span key={s} className={`chip ${filterSubject===s?"on":""}`} onClick={()=>setFilterSubject(s)}>
+                  {s.split("|")[0].trim().split(" ").slice(0,2).join(" ")}
+                  {s.includes("(Lab)")?" (Lab)":s.includes("(Th)")?" (Th)":""}
+                </span>
+              ))}
+            </div>
+
+            {/* Cards */}
+            {visible.length===0 ? (
+              <div className="empty fade-in">
+                <div className="empty-icon">🗂️</div>
+                <p style={{fontSize:15,fontWeight:600,marginBottom:6}}>Nothing here yet</p>
+                <p style={{fontSize:13}}>
+                  {items.length===0 ? "Add the first assignment or quiz for the class." : "Try adjusting your filters."}
+                </p>
+                {items.length===0&&(
+                  <button className="btn b-primary" style={{marginTop:20}} onClick={()=>setView("add")}>
+                    + Add First Item
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid fade-in">
+                {visible.map(item=>{
+                  const st    = getStatus(item.deadline);
+                  const color = subjColor(item.subject);
+                  return (
+                    <div key={item.id}
+                      className={`icard ${st.level==="ended"?"ended":""}`}
+                      onClick={()=>{setSelectedId(item.id);setView("detail");}}>
+                      <div className="icard-stripe" style={{
+                        background: st.level==="ongoing"?"#16a34a":st.level==="soon"?"#d97706":"#64748b"
+                      }}/>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:10,paddingTop:4}}>
+                        <span className={`tbadge ${item.type==="Assignment"?"t-a":"t-q"}`}>
+                          {item.type==="Assignment"?"📋":"📝"} {item.type}
+                        </span>
+                        <span className={`stbadge ${st.level==="ongoing"?"st-on":st.level==="soon"?"st-so":"st-en"}`} style={{fontSize:10.5}}>
+                          {st.icon} {st.level==="ongoing"?"Ongoing":st.level==="soon"?"Soon":"Ended"}
+                        </span>
+                      </div>
+                      <h3 style={{fontSize:14.5,fontWeight:600,lineHeight:1.35,marginBottom:8,color:st.level==="ended"?mt:tx}}>
+                        {item.title}
+                      </h3>
+                      <span className="subj-pill" style={{background:color+"1a",color,marginBottom:10,display:"inline-block",fontSize:10.5,lineHeight:1.6}}>
+                        {item.subject}
+                      </span>
+                      <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:8,paddingTop:8,borderTop:`1px solid ${bdr}`}}>
+                        <div style={{fontSize:12,color:mt}}>📡 {item.source}</div>
+                        <div style={{fontSize:12,fontWeight:st.level!=="ended"?500:400,
+                          color:st.level==="ended"?mt:st.level==="soon"?"#d97706":tx}}>
+                          📅 {fmt(item.deadline)}
+                        </div>
+                        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:600,
+                          color:st.level==="ongoing"?"#16a34a":st.level==="soon"?"#d97706":mt}}>
+                          {st.label}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <Toast/>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
