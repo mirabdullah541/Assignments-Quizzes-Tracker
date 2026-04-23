@@ -6,7 +6,7 @@ A real-time, shared web app for university students to collaboratively track ass
 
 ## 🌐 Live App
 
-👉 **[Open the App](https://your-username.github.io/your-repo-name)**
+👉 **[Open the App](https://mirabdullah541.github.io/Assignments-Quizzes-Tracker/)**
 
 ---
 
